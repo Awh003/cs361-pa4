@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <pthread.h>
 
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -33,7 +34,7 @@ int minimum(int a, int b)
     return (a <= b ? a : b);
 }
 
-void subFactory(void *args);
+void *subFactory(void *arg);
 
 void factLog(char *str)
 {
@@ -43,7 +44,7 @@ void factLog(char *str)
 
 /*-------------------------------------------------------*/
 
-// Global Variable for Future Thread to Share
+// Global Variable for Future Thread to Shared
 int remainsToMake, // Must be protected by a Mutex
     actuallyMade;  // Actually manufactured items
 
@@ -52,13 +53,6 @@ struct sockaddr_in
     srvrSkt, /* the address of this server   */
     clntSkt; /* remote client's socket       */
 char ipStr[IPSTRLEN];
-
-// For thread arguments
-struct ThreadArgs {
-    int facID; // Factory ID
-    int myCap; // Capacity of the factory
-    int myDur; // Duration of each cycle of the factory
-};
 
 //------------------------------------------------------------
 //  Handle Ctrl-C or KILL
@@ -84,26 +78,37 @@ int main(int argc, char *argv[])
     int N = 1;                   /* Num threads serving the client */
 
     // Set up signal handlers
-    if (sigactionWrapper(SIGINT, goodbye) == SIG_ERR) {
+    if (sigactionWrapper(SIGINT, goodbye) == SIG_ERR)
+    {
         perror("Can't set signal handler for SIGINT");
         exit(1);
     }
-    if (sigactionWrapper(SIGTERM, goodbye) == SIG_ERR) {
+    if (sigactionWrapper(SIGTERM, goodbye) == SIG_ERR)
+    {
         perror("Can't set signal handler for SIGTERM");
         exit(1);
     }
 
     printf("\nThis is the FACTORY server developed by %s\n", myName);
-    
-    if (argc < 4)
+    switch (argc)
     {
-        printf("FACTORY Usage: %s [socketNumber] [numThreads] [port]\n", argv[0]);
-        exit(-1);
-    }
+    case 1:
+        break; // use default port with a single factory thread
 
-    N = atoi(argv[1]);
-    ipStr = argv[2];
-    unsigned short port = (unsigned short)atoi(argv[3]);
+    case 2:
+        N = atoi(argv[1]); // get from command line
+        port = 50015;      // use this port by default
+        break;
+
+    case 3:
+        N = atoi(argv[1]);    // get from command line
+        port = atoi(argv[2]); // use port from command line
+        break;
+
+    default:
+        printf("FACTORY Usage: %s [numThreads] [port]\n", argv[0]);
+        exit(1);
+    }
 
     // missing code goes here
     // Create a socket
@@ -117,7 +122,7 @@ int main(int argc, char *argv[])
     // Bind the socket to the server address
     memset((void *)&srvrSkt, 0, sizeof(srvrSkt));
     srvrSkt.sin_family = AF_INET;
-    srvrSkt.sin_addr.s_addr = inet_addr(ipStr);
+    srvrSkt.sin_addr.s_addr = htonl(INADDR_ANY);
     srvrSkt.sin_port = htons(port);
 
     if (bind(sd, (SA *)&srvrSkt, sizeof(srvrSkt)) < 0)
@@ -129,10 +134,7 @@ int main(int argc, char *argv[])
     inet_ntop(AF_INET, (void *)&srvrSkt.sin_addr.s_addr, ipStr, IPSTRLEN);
     printf("\nBound socket %d to IP %s Port %d\n", sd, ipStr, ntohs(srvrSkt.sin_port));
 
-    int numThreads = 0;
-    pthread_t threads[N];
     int forever = 1;
-    srandom(time(NULL));
     while (forever)
     {
         printf("\nFACTORY server waiting for Order Requests\n");
@@ -175,31 +177,37 @@ int main(int argc, char *argv[])
         printMsg(&msg1);
         puts("");
 
-        if (numThreads < N) {
-            // Generate random values for factory thread
-            struct ThreadArgs args;
-            args.facID = numThreads + 1;
-            args.myCap = (int)random() % (50 - 10 + 1) + 10;
-            args.myDur = (int)random() % (1200 - 500 + 1) + 500;
-            // Create thread
-            if (pthread_create(&thread, NULL, subFactory, &args) != 0) {
-                threads[numThreads] 
-                perror("pthread_create error");
-                exit(1)
-            }
-            numThreads++;
+        // Create a thread for each factory
+        pthread_t factory_threads[N];
+        for (int i = 0; i < N; i++)
+        {
+            // Prepare the arguments for the thread (factory ID, capacity, and duration)
+            int *args = malloc(sizeof(int) * 3);
+            args[0] = i + 1;
+            args[1] = 50;  // replace with actual capacity
+            args[2] = 350; // replace with actual duration
+
+            // Create the thread
+            pthread_create(&factory_threads[i], NULL, subFactory, args);
+        }
+
+        // Wait for all factory threads to terminate
+        for (int i = 0; i < N; i++)
+        {
+            pthread_join(factory_threads[i], NULL);
         }
     }
 
     return 0;
 }
-// int factoryID, int myCapacity, int myDuration
-void subFactory(void *args)
+
+void *subFactory(void *arg)
 {
-    // Grab arguments
-    int factoryID = args.facID;
-    int myCapacity = args.myCap;
-    int myDuration = args.myDur;
+    int *args = (int *)arg;
+    int factoryID = ((int *)arg)[0];
+    int myCapacity = ((int *)arg)[1];
+    int myDuration = ((int *)arg)[2];
+    free(arg);
 
     char strBuff[MAXSTR]; // print buffer
     int partsImade = 0, myIterations = 0;
@@ -251,4 +259,6 @@ void subFactory(void *args)
 
     snprintf(strBuff, MAXSTR, ">>> Factory #  %-3d: Terminating after making total of %-5d   parts in %-4d    iterations\n", factoryID, partsImade, myIterations);
     factLog(strBuff);
+
+    return NULL;
 }
