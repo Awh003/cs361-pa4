@@ -33,7 +33,7 @@ int minimum(int a, int b)
     return (a <= b ? a : b);
 }
 
-void subFactory(int factoryID, int myCapacity, int myDuration);
+void subFactory(void *args);
 
 void factLog(char *str)
 {
@@ -43,7 +43,7 @@ void factLog(char *str)
 
 /*-------------------------------------------------------*/
 
-// Global Variable for Future Thread to Shared
+// Global Variable for Future Thread to Share
 int remainsToMake, // Must be protected by a Mutex
     actuallyMade;  // Actually manufactured items
 
@@ -52,6 +52,13 @@ struct sockaddr_in
     srvrSkt, /* the address of this server   */
     clntSkt; /* remote client's socket       */
 char ipStr[IPSTRLEN];
+
+// For thread arguments
+struct ThreadArgs {
+    int facID; // Factory ID
+    int myCap; // Capacity of the factory
+    int myDur; // Duration of each cycle of the factory
+};
 
 //------------------------------------------------------------
 //  Handle Ctrl-C or KILL
@@ -87,25 +94,16 @@ int main(int argc, char *argv[])
     }
 
     printf("\nThis is the FACTORY server developed by %s\n", myName);
-    switch (argc)
+    
+    if (argc < 4)
     {
-    case 1:
-        break; // use default port with a single factory thread
-
-    case 2:
-        N = atoi(argv[1]); // get from command line
-        port = 50015;      // use this port by default
-        break;
-
-    case 3:
-        N = atoi(argv[1]);    // get from command line
-        port = atoi(argv[2]); // use port from command line
-        break;
-
-    default:
-        printf("FACTORY Usage: %s [numThreads] [port]\n", argv[0]);
-        exit(1);
+        printf("FACTORY Usage: %s [socketNumber] [numThreads] [port]\n", argv[0]);
+        exit(-1);
     }
+
+    N = atoi(argv[1]);
+    ipStr = argv[2];
+    unsigned short port = (unsigned short)atoi(argv[3]);
 
     // missing code goes here
     // Create a socket
@@ -119,7 +117,7 @@ int main(int argc, char *argv[])
     // Bind the socket to the server address
     memset((void *)&srvrSkt, 0, sizeof(srvrSkt));
     srvrSkt.sin_family = AF_INET;
-    srvrSkt.sin_addr.s_addr = htonl(INADDR_ANY);
+    srvrSkt.sin_addr.s_addr = inet_addr(ipStr);
     srvrSkt.sin_port = htons(port);
 
     if (bind(sd, (SA *)&srvrSkt, sizeof(srvrSkt)) < 0)
@@ -131,7 +129,10 @@ int main(int argc, char *argv[])
     inet_ntop(AF_INET, (void *)&srvrSkt.sin_addr.s_addr, ipStr, IPSTRLEN);
     printf("\nBound socket %d to IP %s Port %d\n", sd, ipStr, ntohs(srvrSkt.sin_port));
 
+    int numThreads = 0;
+    pthread_t threads[N];
     int forever = 1;
+    srandom(time(NULL));
     while (forever)
     {
         printf("\nFACTORY server waiting for Order Requests\n");
@@ -174,14 +175,32 @@ int main(int argc, char *argv[])
         printMsg(&msg1);
         puts("");
 
-        subFactory(1, 50, 350);
+        if (numThreads < N) {
+            // Generate random values for factory thread
+            struct ThreadArgs args;
+            args.facID = numThreads + 1;
+            args.myCap = (int)random() % (50 - 10 + 1) + 10;
+            args.myDur = (int)random() % (1200 - 500 + 1) + 500;
+            // Create thread
+            if (pthread_create(&thread, NULL, subFactory, &args) != 0) {
+                threads[numThreads] 
+                perror("pthread_create error");
+                exit(1)
+            }
+            numThreads++;
+        }
     }
 
     return 0;
 }
-
-void subFactory(int factoryID, int myCapacity, int myDuration)
+// int factoryID, int myCapacity, int myDuration
+void subFactory(void *args)
 {
+    // Grab arguments
+    int factoryID = args.facID;
+    int myCapacity = args.myCap;
+    int myDuration = args.myDur;
+
     char strBuff[MAXSTR]; // print buffer
     int partsImade = 0, myIterations = 0;
     msgBuf msg;
@@ -192,7 +211,6 @@ void subFactory(int factoryID, int myCapacity, int myDuration)
         if (remainsToMake <= 0)
             break; // Not anymore, exit the loop
 
-        // missing code goes here
         // Decide how many parts to make
         int partsToMake = minimum(myCapacity, remainsToMake);
 
@@ -210,8 +228,6 @@ void subFactory(int factoryID, int myCapacity, int myDuration)
         myIterations++;
 
         // Send a Production Message to Supervisor
-
-        // missing code goes here
         msg.purpose = htonl(PRODUCTION_MSG);
         msg.facID = htonl(factoryID);
         msg.capacity = htonl(myCapacity);
@@ -225,8 +241,6 @@ void subFactory(int factoryID, int myCapacity, int myDuration)
     }
 
     // Send a Completion Message to Supervisor
-
-    // missing code goes here
     msg.purpose = htonl(COMPLETION_MSG);
     msg.facID = htonl(factoryID);
     if (sendto(sd, &msg, sizeof(msg), 0, (SA *)&clntSkt, sizeof(clntSkt)) < 0)
