@@ -1,10 +1,3 @@
-//---------------------------------------------------------------------
-// Assignment : PA-04 Threads-UDP
-// Date       :
-// Author     : Max Adams & Aidan Herring
-// File Name  : procurement.c
-//---------------------------------------------------------------------
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -19,6 +12,7 @@
 
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 
 #include "wrappers.h"
 #include "message.h"
@@ -28,6 +22,7 @@
 typedef struct sockaddr SA;
 int activeFactories;
 int partsMade[MAXFACTORIES + 1];
+int iters[MAXFACTORIES + 1]; // Define iters array
 int sd;
 struct sockaddr_in srvrSkt;
 
@@ -49,7 +44,6 @@ void *procurement_thread_func(void *arg)
             exit(1);
         }
 
-        // Check the purpose of the message
         switch (ntohl(msg.purpose))
         {
         case PRODUCTION_MSG:
@@ -57,6 +51,8 @@ void *procurement_thread_func(void *arg)
             partsMade[ntohl(msg.facID)] += ntohl(msg.partsMade);
             printf("PROCUREMENT: Factory #%d   produced %d   parts in %d   milliSecs\n",
                    ntohl(msg.facID), ntohl(msg.partsMade), ntohl(msg.duration));
+            // Increment the iteration count for this factory
+            iters[ntohl(msg.facID)]++;
             break;
         case COMPLETION_MSG:
             // If the message is a Completion message, break the loop
@@ -73,8 +69,7 @@ void *procurement_thread_func(void *arg)
 /*-------------------------------------------------------*/
 int main(int argc, char *argv[])
 {
-    int numFactories,                  // Total Number of Factory Threads               // How many are still alive and manufacturing parts
-        iters[MAXFACTORIES + 1] = {0}, // num Iterations completed by each Factory
+    int numFactories, // Total Number of Factory Threads               // How many are still alive and manufacturing parts
         totalItems = 0;
 
     char *myName = "Max Adams & Aidan Herring";
@@ -116,6 +111,11 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    // Record the start time
+    struct timeval start_time, end_time;
+    double elapsedTime;
+    gettimeofday(&start_time, NULL);
+
     // Send the initial request to the Factory Server
     msgBuf msg1;
 
@@ -151,6 +151,9 @@ int main(int argc, char *argv[])
     // missing code goes here
     numFactories = activeFactories = ntohl(msg2.numFac);
 
+    // Initialize the iters array
+    memset(iters, 0, sizeof(iters));
+
     // Create a thread for each factory
     pthread_t procurement_threads[numFactories];
     for (int i = 0; i < numFactories; i++)
@@ -169,21 +172,25 @@ int main(int argc, char *argv[])
         pthread_join(procurement_threads[i], NULL);
     }
 
+    // Record the end time
+    gettimeofday(&end_time, NULL);
+
+    // Calculate the elapsed time in milliseconds
+    elapsedTime = (double)(end_time.tv_sec - start_time.tv_sec) * 1000.0;    // seconds to milliseconds
+    elapsedTime += (double)(end_time.tv_usec - start_time.tv_usec) / 1000.0; // microseconds to milliseconds
+
     // Print the summary report
     totalItems = 0;
     printf("\n\n****** PROCUREMENT Summary Report ******\n");
-
-    // Print the summary for each factory
+    printf("    Sub-Factory      Parts Made      Iterations\n");
     for (int i = 1; i <= numFactories; i++)
     {
-        printf("Factory #  %d made a total of %d  parts in    %d iterations\n", i, partsMade[i], iters[i]);
+        printf("              %d             %d               %d\n", i, partsMade[i], iters[i]);
         totalItems += partsMade[i];
     }
-
-    printf("==============================\n");
-
-    // Print the total items made and the original order size
-    printf("Grand total parts made =   %d   vs  order size of   %d\n", totalItems, orderSize);
+    printf("===================================================\n");
+    printf("Grand total parts made   =   %d   vs  order size of   %d\n", totalItems, orderSize);
+    printf("Order-to-Completion time =  %.1f milliSeconds\n", elapsedTime);
 
     printf("\n>>> Procurement Terminated\n");
 
